@@ -8,22 +8,65 @@ const nextId = () => ++seq;
 const today = () => new Date().toISOString().slice(0, 10);
 
 // ---- infraestrutura: mock ou http real ----
+
 async function http(path, method = 'GET', body) {
-  const res = await fetch(API_CONFIG.BASE_URL + path, {
-    method,
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('token') || ''}` },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    let message = text;
-    try { message = JSON.parse(text).message || text; } catch { /* resposta não era JSON */ }
-    throw new Error(message || 'Erro na API');
+  const token = localStorage.getItem('token');
+
+  const isFormData = body instanceof FormData;
+
+  const headers = {};
+
+  // FormData não deve receber Content-Type manualmente.
+  // O navegador adiciona o boundary automaticamente.
+  if (!isFormData) {
+    headers['Content-Type'] = 'application/json';
   }
-  return res.json();
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  const response = await fetch(`${API_CONFIG.BASE_URL}${path}`, {
+    method,
+    headers,
+    body: body
+      ? isFormData
+        ? body
+        : JSON.stringify(body)
+      : undefined,
+  });
+
+  //const data = await response.json().catch(() => null);
+
+  const texto = await response.text();
+
+  let data = null;
+
+  try {
+    data = texto ? JSON.parse(texto) : null;
+  } catch {
+    data = null;
+  }
+
+  if (!response.ok) {
+    const mensagem =
+      data?.erro ||
+      data?.mensagem ||
+      data?.message ||
+      data?.title ||
+      'Erro ao comunicar com o servidor.';
+      
+        throw new Error(mensagem);
+  }
+
+  return data;
 }
 
 async function call(mock, path, method, body) {
+  console.log('USE_MOCK:', API_CONFIG.USE_MOCK);
+  console.log('BASE_URL:', API_CONFIG.BASE_URL);
+  console.log('ENDPOINT:', path);
+
   if (!API_CONFIG.USE_MOCK) return http(path, method, body);
   await new Promise((r) => setTimeout(r, 200));
   return structuredClone(mock());
@@ -38,21 +81,286 @@ const withRating = (u) => {
 };
 
 // ---- autenticação ----
-export const login = (email, password) =>
-  call(() => {
-    const u = db.users.find((x) => x.email === email && x.password === password);
-    if (!u) throw new Error('E-mail ou senha inválidos');
-    if (u.blocked) throw new Error('Conta bloqueada. Fale com o suporte.');
-    return { token: 'mock-token', user: safe(u) };
-  }, E.login, 'POST', { email, password });
+export const login = (perfil, identificador, senha) => {
+  const endpoint =
+    perfil === 'admin'
+      ? API_CONFIG.endpoints.loginAdmin
+      : perfil === 'profissional'
+        ? API_CONFIG.endpoints.loginProfissional
+        : API_CONFIG.endpoints.loginCliente;
 
-export const register = (data) =>
-  call(() => {
-    if (db.users.some((u) => u.email === data.email)) throw new Error('E-mail já cadastrado');
-    const user = { id: nextId(), blocked: false, plan: 'taxa_servico', ...data };
-    db.users.push(user);
-    return { token: 'mock-token', user: safe(user) };
-  }, E.register, 'POST', data);
+  const body =
+    perfil === 'admin'
+      ? { email: identificador, senha }
+      : { identificador, senha };
+
+  
+  return call(
+    () => {
+      const u = db.users.find((x) => {
+        const identificacao =
+          perfil === 'admin'
+            ? x.email === identificador
+            : x.email === identificador || x.phone === identificador;
+
+        return identificacao && x.password === senha && x.role === perfil;
+      });
+
+      if (!u) {
+        throw new Error('E-mail, telefone ou senha inválidos.');
+      }
+
+      if (u.blocked) {
+        throw new Error('Conta bloqueada. Fale com o suporte.');
+      }
+
+      return {
+        token: 'mock-token',
+        user: safe(u),
+      };
+    },
+    endpoint,
+    'POST',
+    body
+  ).then((resultado) => {
+    if (resultado.user) {
+      return resultado;
+    }
+
+    if (perfil === 'admin') {
+      return {
+        token: resultado.token,
+        user: {
+          id: null,
+          name: resultado.nome,
+          email: resultado.email,
+          role: 'admin',
+        },
+      };
+    }
+
+    const foto = resultado.foto
+      ? `data:${resultado.fotoContentType || 'image/jpeg'};base64,${resultado.foto}`
+      : null;
+
+    if (perfil === 'profissional') {
+      return {
+        token: resultado.token,
+        user: {
+          id: resultado.profissionalId,
+          name: resultado.nome,
+          phone: resultado.telefone,
+          email: resultado.email,
+          photo: foto,
+          role: 'profissional',
+        },
+      };
+    }
+
+    return {
+      token: resultado.token,
+      user: {
+        id: resultado.clienteId,
+        name: resultado.nome,
+        phone: resultado.telefone,
+        email: resultado.email,
+        photo: foto,
+        role: 'usuario',
+      },
+    };
+  });
+};
+
+export const register = (data) => {
+  const profissional = data.role === 'profissional';
+
+  const endpoint = profissional
+    ? API_CONFIG.endpoints.registerProfissional
+    : API_CONFIG.endpoints.registerCliente;
+
+  // Monta o multipart/form-data para a API.
+  const body = new FormData();
+
+  const dadosComuns = {
+    Nome: data.name,
+    Telefone: data.phone,
+    Email: data.email,
+    Senha: data.password,
+    Endereco: data.address,
+    Bairro: data.neighborhood,
+    Cidade: data.city,
+    Cep: data.zipCode,
+    PontoReferencia: data.referencePoint,
+  };
+
+  Object.entries(dadosComuns).forEach(([chave, valor]) => {
+    body.append(chave, valor ?? '');
+  });
+
+  if (profissional) {
+    (data.kinds || []).forEach((servico, index) => {
+      body.append(`Servicos[${index}]`, servico);
+    });
+
+    (data.pieces || []).forEach((peca, index) => {
+      body.append(`Pecas[${index}]`, peca);
+    });
+  }
+
+  // Foto original selecionada pelo usuário.
+  if (data.photoFile) {
+    body.append('Foto', data.photoFile);
+  }
+
+  return call(
+    () => {
+      if (db.users.some((u) => u.email === data.email)) {
+        throw new Error('E-mail já cadastrado.');
+      }
+
+      // Não armazenar o objeto File no mock.
+      const { photoFile, ...dadosMock } = data;
+
+      const user = {
+        id: nextId(),
+        blocked: false,
+        plan: 'taxa_servico',
+        ...dadosMock,
+      };
+
+      db.users.push(user);
+
+      return {
+        token: 'mock-token',
+        user: safe(user),
+      };
+    },
+    endpoint,
+    'POST',
+    body
+  );
+};
+
+// ---- atualização de perfil ----
+export const updateProfile = (perfil, data) => {
+  const profissional = perfil === 'profissional';
+
+  const endpoint = profissional
+    ? '/api/profissionais/perfil'
+    : '/api/clientes/perfil';
+
+  const body = new FormData();
+
+  const campos = {
+    Nome: data.name,
+    Telefone: data.phone,
+    Email: data.email,
+    Endereco: data.address,
+    Bairro: data.neighborhood,
+    Cidade: data.city,
+    Cep: data.zipCode,
+    PontoReferencia: data.referencePoint,
+    RemoverFoto: data.removePhoto ? 'true' : 'false',
+  };
+
+  Object.entries(campos).forEach(([chave, valor]) => {
+    body.append(chave, valor ?? '');
+  });
+
+  // Dados específicos do profissional
+  if (profissional) {
+    (data.kinds || []).forEach((servico, index) => {
+      body.append(`Servicos[${index}]`, servico);
+    });
+
+    (data.pieces || []).forEach((peca, index) => {
+      body.append(`Pecas[${index}]`, peca);
+    });
+  }
+
+  // Foto selecionada
+  if (data.photoFile) {
+    body.append('Foto', data.photoFile);
+  }
+
+  return call(
+    () => {
+      const user = db.users.find(
+        (u) => u.id === data.id
+      );
+
+      if (!user) {
+        throw new Error('Usuário não encontrado.');
+      }
+
+      Object.assign(user, {
+        name: data.name,
+        phone: data.phone,
+        email: data.email,
+        address: data.address,
+        neighborhood: data.neighborhood,
+        city: data.city,
+        zipCode: data.zipCode,
+        referencePoint: data.referencePoint,
+      });
+
+      if (profissional) {
+        user.kinds = data.kinds || [];
+        user.pieces = data.pieces || [];
+      }
+
+      return safe(user);
+    },
+    endpoint,
+    'PUT',
+    body
+  );
+};
+
+
+
+export const getMyProfile = async (perfil) => {
+  const profissional = perfil === 'profissional';
+
+  const endpoint = profissional
+    ? '/api/profissionais/perfil'
+    : '/api/clientes/perfil';
+
+  const resultado = await call(
+    () => {
+      const user = db.users.find(
+        u => String(u.id) === String(
+          JSON.parse(localStorage.getItem('user') || '{}').id
+        )
+      );
+
+      if (!user) {
+        throw new Error('Usuário não encontrado.');
+      }
+
+      return safe(user);
+    },
+    endpoint
+  );
+
+  return {
+    id: resultado.id,
+    name: resultado.nome || resultado.name || '',
+    phone: resultado.telefone || resultado.phone || '',
+    email: resultado.email || '',
+    address: resultado.endereco || resultado.address || '',
+    neighborhood: resultado.bairro || resultado.neighborhood || '',
+    city: resultado.cidade || resultado.city || '',
+    zipCode: resultado.cep || resultado.zipCode || '',
+    referencePoint:
+      resultado.pontoReferencia || resultado.referencePoint || '',
+    photo: resultado.foto
+      ? `data:${resultado.fotoContentType || 'image/jpeg'};base64,${resultado.foto}`
+      : resultado.photo || '',
+    kinds: resultado.servicos || resultado.kinds || [],
+    pieces: resultado.pecas || resultado.pieces || []
+  };
+};
 
 // ---- usuários / profissionais ----
 export const getUser = (id) => call(() => withRating(find(db.users, id)), E.user(id));
@@ -72,8 +380,38 @@ export const setPlan = (userId, plan) =>
   call(() => { find(db.users, userId).plan = plan; return { ok: true }; }, E.plan(userId), 'PUT', { plan });
 
 // ---- serviços ----
-export const listServiceKinds = () => call(() => db.serviceKinds, E.serviceKinds, 'GET');
-export const listServiceTypes = () => call(() => db.serviceTypes, E.serviceTypes, 'GET');
+
+// export const listServiceKinds = async () => {
+//   return structuredClone(db.serviceKinds || []);
+// };
+
+// export const listServiceTypes = async () => {
+//   return structuredClone(db.serviceTypes || []);
+// };
+
+export const listServiceKinds = async () => {
+  const resultado = await call(
+    () => db.serviceKinds || [],
+    E.tiposServicos + '/ativos',
+    'GET'
+  );
+
+  return resultado.map(item =>
+    typeof item === 'string' ? item : item.nome
+  );
+};
+
+export const listServiceTypes = async () => {
+  const resultado = await call(
+    () => db.serviceTypes || [],
+    E.tiposPecas + '/ativos',
+    'GET'
+  );
+
+  return resultado.map(item =>
+    typeof item === 'string' ? item : item.nome
+  );
+};
 
 // ---- fabricação completa ----
 export const listFabricationSteps = (pieceType) =>
@@ -204,7 +542,7 @@ export const acceptOffer = (id) =>
   }, E.acceptOffer(id), 'POST');
 
   // Atualiza o andamento de uma etapa de fabricação.
-// etapaStatus: nao_iniciada | iniciada | em_desenvolvimento | finalizada
+  // etapaStatus: nao_iniciada | iniciada | em_desenvolvimento | finalizada
 export const updateFabricationStepProgress = (
   serviceId,
   etapaStatus,
@@ -507,3 +845,82 @@ function advanceProduction(service) {
   production.serviceIds.push(nextService.id);
   production.currentStepOrder = nextStep.order;
 }
+
+
+// ==========================================
+// ADMINISTRAÇÃO - TIPOS DE SERVIÇOS
+// ==========================================
+
+export const listAdminServiceKinds = async () => {
+  return call(
+    () => db.serviceKinds || [],
+    E.tiposServicos,
+    'GET'
+  );
+};
+
+export const createServiceKind = async (nome) => {
+  return call(
+    () => null,
+    E.tiposServicos,
+    'POST',
+    { nome }
+  );
+};
+
+export const updateServiceKind = async (id, nome) => {
+  return call(
+    () => null,
+    `${E.tiposServicos}/${id}`,
+    'PUT',
+    { id, nome }
+  );
+};
+
+export const toggleServiceKind = async (id, ativo) => {
+  return call(
+    () => null,
+    `${E.tiposServicos}/${id}/status`,
+    'PATCH',
+    { id, ativo }
+  );
+};
+
+// ==========================================
+// ADMINISTRAÇÃO - TIPOS DE PEÇAS
+// ==========================================
+
+export const listAdminServiceTypes = async () => {
+  return call(
+    () => db.serviceTypes || [],
+    E.tiposPecas,
+    'GET'
+  );
+};
+
+export const createServiceType = async (nome) => {
+  return call(
+    () => null,
+    E.tiposPecas,
+    'POST',
+    { nome }
+  );
+};
+
+export const updateServiceType = async (id, nome) => {
+  return call(
+    () => null,
+    `${E.tiposPecas}/${id}`,
+    'PUT',
+    { id, nome }
+  );
+};
+
+export const toggleServiceType = async (id, ativo) => {
+  return call(
+    () => null,
+    `${E.tiposPecas}/${id}/status`,
+    'PATCH',
+    { id, ativo }
+  );
+};

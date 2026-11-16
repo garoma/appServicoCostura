@@ -2,9 +2,16 @@
 // USE_MOCK = true  -> usa dados fake (src/data/mockData.js)
 // USE_MOCK = false -> chama a API real em BASE_URL
 export const API_CONFIG = {
-  USE_MOCK: true,
-  BASE_URL: 'https://api.appservicoscostura.com.br',
+  USE_MOCK: false,
+  //BASE_URL: 'https://api.appservicoscostura.com.br',
+  BASE_URL: 'https://localhost:7088',
   endpoints: {
+    loginAdmin: '/api/auth/login',
+    loginCliente: '/api/auth/cliente/login',
+    loginProfissional: '/api/auth/profissional/login',
+    registerCliente: '/api/clientes/criar',
+    registerProfissional: '/api/profissionais/criar',
+
     fabricationSteps: '/fabrication-steps',
     login: '/auth/login',
     register: '/auth/register',
@@ -22,6 +29,8 @@ export const API_CONFIG = {
     reviews: '/reviews',
     payments: '/payments',
     payPayment: (id) => `/payments/${id}/pay`,
+    tiposServicos: '/api/tipos-servicos',
+    tiposPecas: '/api/tipos-pecas',
   },
 };
 

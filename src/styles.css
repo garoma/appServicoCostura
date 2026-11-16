@@ -114,3 +114,33 @@ th { color: var(--muted); font-size: .85rem; }
 .check-group label { display: flex; align-items: center; gap: 6px; font-weight: 500; }
 .check-group input { width: auto; }
 .photo-pick { display: flex; align-items: center; gap: 12px; }
+
+/* foto de perfil - formulário Meu Perfil */
+.profile-photo {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 24px;
+  min-height: 110px;
+}
+
+.profile-photo > div {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.profile-photo .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  position: static;
+  margin: 0;
+}
+
+.profile-photo small {
+  display: block;
+  color: var(--muted);
+}
