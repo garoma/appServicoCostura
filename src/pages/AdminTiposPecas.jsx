@@ -14,6 +14,7 @@ export default function AdminTiposPecas() {
   const [editandoId, setEditandoId] = useState(null);
   const [carregando, setCarregando] = useState(true);
   const [salvando, setSalvando] = useState(false);
+  const [alterandoId, setAlterandoId] = useState(null);
   const [mensagem, setMensagem] = useState('');
   const [erro, setErro] = useState('');
 
@@ -23,8 +24,24 @@ export default function AdminTiposPecas() {
       setErro('');
 
       const dados = await listAdminServiceTypes();
-      setTipos(dados || []);
+
+      setTipos(
+        Array.isArray(dados)
+          ? dados.map((tipo, index) => ({
+              id: tipo.id ?? index + 1,
+              nome:
+                typeof tipo === 'string'
+                  ? tipo
+                  : tipo.nome || tipo.name || '',
+              ativo:
+                typeof tipo === 'string'
+                  ? true
+                  : tipo.ativo !== false,
+            }))
+          : []
+      );
     } catch (error) {
+      console.error('Erro ao carregar tipos de peças:', error);
       setErro(error.message || 'Erro ao carregar tipos de peças.');
     } finally {
       setCarregando(false);
@@ -45,12 +62,14 @@ export default function AdminTiposPecas() {
       return;
     }
 
+    if (salvando) return;
+
     try {
       setSalvando(true);
       setErro('');
       setMensagem('');
 
-      if (editandoId) {
+      if (editandoId !== null) {
         await updateServiceType(editandoId, nomeLimpo);
         setMensagem('Tipo de peça atualizado com sucesso.');
       } else {
@@ -60,8 +79,10 @@ export default function AdminTiposPecas() {
 
       setNome('');
       setEditandoId(null);
+
       await carregarTipos();
     } catch (error) {
+      console.error('Erro ao salvar tipo de peça:', error);
       setErro(error.message || 'Não foi possível salvar o tipo de peça.');
     } finally {
       setSalvando(false);
@@ -79,10 +100,14 @@ export default function AdminTiposPecas() {
     setEditandoId(null);
     setNome('');
     setErro('');
+    setMensagem('');
   };
 
   const alterarStatus = async (tipo) => {
+    if (alterandoId !== null) return;
+
     try {
+      setAlterandoId(tipo.id);
       setErro('');
       setMensagem('');
 
@@ -90,13 +115,16 @@ export default function AdminTiposPecas() {
 
       setMensagem(
         tipo.ativo
-          ? 'Tipo de peça desativado.'
-          : 'Tipo de peça ativado.'
+          ? 'Tipo de peça desativado com sucesso.'
+          : 'Tipo de peça ativado com sucesso.'
       );
 
       await carregarTipos();
     } catch (error) {
+      console.error('Erro ao alterar status:', error);
       setErro(error.message || 'Não foi possível alterar o status.');
+    } finally {
+      setAlterandoId(null);
     }
   };
 
@@ -135,7 +163,11 @@ export default function AdminTiposPecas() {
           marginBottom: '24px',
         }}
       >
-        <h3>{editandoId ? 'Editar tipo de peça' : 'Novo tipo de peça'}</h3>
+        <h3>
+          {editandoId !== null
+            ? 'Editar tipo de peça'
+            : 'Novo tipo de peça'}
+        </h3>
 
         <label htmlFor="nomeTipoPeca">Nome</label>
 
@@ -146,22 +178,33 @@ export default function AdminTiposPecas() {
           onChange={(e) => setNome(e.target.value)}
           placeholder="Ex.: Calça, Short, Bermuda"
           maxLength={100}
+          disabled={salvando}
           style={{ ...campo, marginTop: '6px', marginBottom: '12px' }}
         />
 
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
           <button
             type="submit"
-            disabled={salvando}
-            style={{ ...botao, background: '#176b3a', color: '#fff' }}
+            disabled={salvando || !nome.trim()}
+            style={{
+              ...botao,
+              background: '#176b3a',
+              color: '#fff',
+              opacity: salvando || !nome.trim() ? 0.6 : 1,
+            }}
           >
-            {salvando ? 'Salvando...' : editandoId ? 'Salvar alterações' : 'Cadastrar'}
+            {salvando
+              ? 'Salvando...'
+              : editandoId !== null
+                ? 'Salvar alterações'
+                : 'Cadastrar'}
           </button>
 
-          {editandoId && (
+          {editandoId !== null && (
             <button
               type="button"
               onClick={cancelarEdicao}
+              disabled={salvando}
               style={{ ...botao, background: '#777', color: '#fff' }}
             >
               Cancelar
@@ -181,7 +224,7 @@ export default function AdminTiposPecas() {
       <h3>Tipos cadastrados</h3>
 
       {carregando ? (
-        <p>Carregando...</p>
+        <p>Carregando tipos de peças...</p>
       ) : tipos.length === 0 ? (
         <p>Nenhum tipo de peça cadastrado.</p>
       ) : (
@@ -203,6 +246,7 @@ export default function AdminTiposPecas() {
             >
               <div>
                 <strong>{tipo.nome}</strong>
+
                 <div
                   style={{
                     fontSize: '13px',
@@ -217,22 +261,33 @@ export default function AdminTiposPecas() {
               <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                 <button
                   type="button"
+                  disabled={alterandoId !== null || salvando}
                   onClick={() => editar(tipo)}
-                  style={{ ...botao, background: '#e8eef7', color: '#234' }}
+                  style={{
+                    ...botao,
+                    background: '#e8eef7',
+                    color: '#234',
+                  }}
                 >
                   Editar
                 </button>
 
                 <button
                   type="button"
+                  disabled={alterandoId !== null || salvando}
                   onClick={() => alterarStatus(tipo)}
                   style={{
                     ...botao,
                     background: tipo.ativo ? '#fde8e7' : '#e5f4e8',
                     color: tipo.ativo ? '#a32121' : '#176b3a',
+                    opacity: alterandoId === tipo.id ? 0.6 : 1,
                   }}
                 >
-                  {tipo.ativo ? 'Desativar' : 'Ativar'}
+                  {alterandoId === tipo.id
+                    ? 'Aguarde...'
+                    : tipo.ativo
+                      ? 'Desativar'
+                      : 'Ativar'}
                 </button>
               </div>
             </div>

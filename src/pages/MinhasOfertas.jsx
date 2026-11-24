@@ -33,11 +33,23 @@ export default function MinhasOfertas({ user, go }) {
   const [message, setMessage] = useState('');
 
   const load = async () => {
+    if (!user?.id) {
+      setError('Não foi possível identificar o profissional logado.');
+      setOffers([]);
+      setLoading(false);
+      return;
+    }
+
     try {
+      setError('');
+
       const result = await listOffers({ proId: user.id });
-      setOffers(result || []);
+
+      setOffers(Array.isArray(result) ? result : []);
     } catch (err) {
+      console.error('ERRO AO CARREGAR OFERTAS:', err);
       setError(err.message || 'Erro ao carregar suas ofertas.');
+      setOffers([]);
     } finally {
       setLoading(false);
     }
@@ -45,9 +57,11 @@ export default function MinhasOfertas({ user, go }) {
 
   useEffect(() => {
     load();
-  }, [user.id]);
+  }, [user?.id]);
 
   const saveStep = async (service, etapaStatus, percentual = 0) => {
+    if (!service?.id || savingId !== null) return;
+
     try {
       setError('');
       setMessage('');
@@ -71,28 +85,43 @@ export default function MinhasOfertas({ user, go }) {
 
       await load();
     } catch (err) {
+      console.error('ERRO AO ATUALIZAR ETAPA:', err);
       setError(err.message || 'Não foi possível atualizar a etapa.');
     } finally {
       setSavingId(null);
     }
   };
 
-  const shown = offers.filter((o) =>
-    o.service?.owner?.name
-      ?.toLowerCase()
-      .includes(q.toLowerCase())
-  );
+  const openReview = (offer) => {
+    if (!offer?.service?.owner?.id) {
+      setError('Não foi possível identificar o cliente para avaliação.');
+      return;
+    }
 
-  if (loading) return <p className="muted">Carregando suas ofertas...</p>;
+    setReviewing(offer);
+  };
+
+  const shown = offers.filter((offer) => {
+    const name = offer?.service?.owner?.name || '';
+
+    return name.toLowerCase().includes(q.toLowerCase());
+  });
+
+  if (loading) {
+    return <p className="muted">Carregando suas ofertas...</p>;
+  }
+
+  const reviewingService = reviewing?.service;
+  const reviewingOwner = reviewingService?.owner;
 
   return (
     <>
-      {reviewing && (
+      {reviewing && reviewingOwner && (
         <AvaliacaoForm
           fromId={user.id}
-          toId={reviewing.service.owner.id}
-          toName={reviewing.service.owner.name}
-          serviceId={reviewing.service.id}
+          toId={reviewingOwner.id}
+          toName={reviewingOwner.name}
+          serviceId={reviewingService.id}
           onDone={() => setReviewing(null)}
           onCancel={() => setReviewing(null)}
         />
@@ -112,52 +141,88 @@ export default function MinhasOfertas({ user, go }) {
       {error && <p className="error">{error}</p>}
       {message && <p className="success">{message}</p>}
 
-      {shown.map((o) => {
-        const service = o.service;
+      {shown.map((offer) => {
+        const service = offer?.service;
+
+        if (!service) return null;
+
+        const owner = service.owner;
+        const photos = Array.isArray(service.photos)
+          ? service.photos
+          : [];
+
         const isCompleteProduction = Boolean(service.pecaCompleta);
         const etapaStatus = service.etapaStatus || 'nao_iniciada';
 
-        const percentual =
-          percentages[service.id] ??
-          service.percentualConclusao ??
-          1;
+        const savedPercent =
+          Number(service.percentualConclusao) || 0;
 
-        const canUpdate =
-          o.status === 'aceita' &&
-          service.status === 'em_andamento' &&
-          isCompleteProduction;
+        const percentual = Math.min(
+          99,
+          Math.max(
+            1,
+            Number(percentages[service.id] ?? savedPercent ?? 1)
+          )
+        );
 
         const currentPercent =
           etapaStatus === 'finalizada'
             ? 100
-            : service.percentualConclusao || 0;
+            : Math.min(100, Math.max(0, savedPercent));
+
+        const canUpdate =
+          offer.status === 'aceita' &&
+          service.status === 'em_andamento' &&
+          isCompleteProduction;
+
+        const serviceStatus =
+          service.status || 'não informado';
 
         return (
-          <article className="card" key={o.id}>
+          <article className="card" key={offer.id}>
             <div className="row between wrap">
               <div>
-                <h3>{service.owner.name}</h3>
-                <StarRating value={service.owner.rating} showNumber />
-                <div className="muted">
-                  {service.owner.city} · {service.owner.phone}
-                </div>
+                <h3>{owner?.name || 'Cliente não identificado'}</h3>
+
+                {owner && (
+                  <>
+                    <StarRating
+                      value={owner.rating || 0}
+                      showNumber
+                    />
+
+                    <div className="muted">
+                      {owner.city || 'Cidade não informada'}
+                      {' · '}
+                      {owner.phone || 'Telefone não informado'}
+                    </div>
+                  </>
+                )}
               </div>
 
-              <span className={`badge ${o.status}`}>
-                {LABEL[o.status]}
+              <span className={`badge ${offer.status || ''}`}>
+                {LABEL[offer.status] || offer.status || 'Sem situação'}
               </span>
             </div>
 
             <p>
-              <b>{service.serviceKind} · {service.type}</b>
+              <b>
+                {service.serviceKind || 'Serviço'}
+                {' · '}
+                {service.type || 'Peça não informada'}
+              </b>
               {' · '}
-              {service.description}
+              {service.description || 'Sem descrição.'}
             </p>
 
-            {service.photos?.length > 0 && (
+            {photos.length > 0 && (
               <div className="photos">
-                {service.photos.map((p, i) => (
-                  <img key={i} src={p} alt="" />
+                {photos.map((photo, index) => (
+                  <img
+                    key={index}
+                    src={photo}
+                    alt={`Foto do serviço ${index + 1}`}
+                  />
                 ))}
               </div>
             )}
@@ -165,23 +230,27 @@ export default function MinhasOfertas({ user, go }) {
             <dl className="data-list">
               <div>
                 <dt>Quantidade</dt>
-                <dd>{service.quantity} peça(s)</dd>
+                <dd>{service.quantity || 0} peça(s)</dd>
               </div>
+
               <div>
                 <dt>Seu preço (unidade)</dt>
-                <dd>{brl(o.price)}</dd>
+                <dd>{brl(offer.price || 0)}</dd>
               </div>
+
               <div>
                 <dt>Preço total</dt>
-                <dd><b>{brl(o.total)}</b></dd>
+                <dd><b>{brl(offer.total || 0)}</b></dd>
               </div>
+
               <div>
                 <dt>Prazo</dt>
-                <dd>{o.days} dia(s)</dd>
+                <dd>{offer.days || 0} dia(s)</dd>
               </div>
+
               <div>
                 <dt>Situação do serviço</dt>
-                <dd>{service.status.replace('_', ' ')}</dd>
+                <dd>{serviceStatus.replaceAll('_', ' ')}</dd>
               </div>
             </dl>
 
@@ -200,6 +269,7 @@ export default function MinhasOfertas({ user, go }) {
                   <strong>
                     {ETAPA_LABEL[etapaStatus] || etapaStatus}
                   </strong>
+
                   <strong>{currentPercent}%</strong>
                 </div>
 
@@ -227,9 +297,13 @@ export default function MinhasOfertas({ user, go }) {
                     type="button"
                     className="btn primary"
                     disabled={savingId === service.id}
-                    onClick={() => saveStep(service, 'iniciada', 0)}
+                    onClick={() =>
+                      saveStep(service, 'iniciada', 0)
+                    }
                   >
-                    Iniciar etapa
+                    {savingId === service.id
+                      ? 'Salvando...'
+                      : 'Iniciar etapa'}
                   </button>
                 )}
 
@@ -238,11 +312,13 @@ export default function MinhasOfertas({ user, go }) {
                     <>
                       <label className="field">
                         Percentual de conclusão: {percentual}%
+
                         <input
                           type="range"
                           min="1"
                           max="99"
                           value={percentual}
+                          disabled={savingId === service.id}
                           onChange={(e) =>
                             setPercentages((current) => ({
                               ...current,
@@ -292,19 +368,23 @@ export default function MinhasOfertas({ user, go }) {
 
             <div className="row" style={{ marginTop: 14 }}>
               <button
+                type="button"
                 className="btn small"
+                disabled={!owner?.id}
                 onClick={() =>
-                  go('perfil', { userId: service.owner.id })
+                  owner?.id && go?.('perfil', { userId: owner.id })
                 }
               >
                 Ver cliente
               </button>
 
-              {o.status === 'aceita' &&
-                service.status === 'concluido' && (
+              {offer.status === 'aceita' &&
+                service.status === 'concluido' &&
+                owner?.id && (
                   <button
+                    type="button"
                     className="btn small primary"
-                    onClick={() => setReviewing(o)}
+                    onClick={() => openReview(offer)}
                   >
                     Avaliar cliente
                   </button>

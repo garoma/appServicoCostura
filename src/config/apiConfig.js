@@ -15,7 +15,7 @@ export const API_CONFIG = {
     fabricationSteps: '/fabrication-steps',
     login: '/auth/login',
     register: '/auth/register',
-    professionals: '/professionals',
+    professionals: '/api/profissionais/buscar',
     users: '/users',
     user: (id) => `/users/${id}`,
     block: (id) => `/users/${id}/block`,
