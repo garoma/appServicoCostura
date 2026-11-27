@@ -2,6 +2,11 @@
 import { API_CONFIG, FEES } from '../config/apiConfig';
 import { db, persistMockDb } from '../data/mockData';
 import { averageRating } from '../utils/rating';
+import {
+  CRITERIA_CLIENTE_AVALIA_PROFISSIONAL,
+  CRITERIA_PROFISSIONAL_AVALIA_CLIENTE,
+  averageRating,
+} from '../utils/rating';
 
 const E = API_CONFIG.endpoints;
 
@@ -16,6 +21,7 @@ const safe = ({ password, ...user }) => user;
 const find = (list, id) =>
   list.find((item) => sameId(item.id, id));
 
+
 const withRating = (user) => {
   if (!user) return null;
 
@@ -23,10 +29,71 @@ const withRating = (user) => {
     (review) => sameId(review.toId, user.id)
   );
 
+  const tipoAvaliacao =
+    user.role === 'profissional'
+      ? 'clienteAvaliaProfissional'
+      : 'profissionalAvaliaCliente';
+
+  const criterios =
+    user.role === 'profissional'
+      ? CRITERIA_CLIENTE_AVALIA_PROFISSIONAL
+      : CRITERIA_PROFISSIONAL_AVALIA_CLIENTE;
+
+  // Considera somente avaliações que possuem todos
+  // os critérios exigidos para aquela modalidade.
+  const avaliacoesValidas = reviews.filter((review) =>
+    criterios.every(
+      (criterio) =>
+        review[criterio.key] !== null &&
+        review[criterio.key] !== undefined &&
+        Number(review[criterio.key]) >= 1 &&
+        Number(review[criterio.key]) <= 5
+    )
+  );
+
   return {
     ...safe(user),
-    rating: averageRating(reviews),
-    reviewCount: reviews.length,
+    rating: averageRating(avaliacoesValidas, tipoAvaliacao),
+    reviewCount: avaliacoesValidas.length,
+  };
+};
+
+const obterEstatisticasServicos = (source = {}) => ({
+  totalServicos: Number(
+    source.totalServicos ?? source.TotalServicos ?? 0
+  ),
+  servicosEmAndamento: Number(
+    source.servicosEmAndamento ?? source.ServicosEmAndamento ?? 0
+  ),
+  servicosFinalizados: Number(
+    source.servicosFinalizados ?? source.ServicosFinalizados ?? 0
+  ),
+  servicosCancelados: Number(
+    source.servicosCancelados ?? source.ServicosCancelados ?? 0
+  ),
+});
+
+const withServiceStats = (user) => {
+  if (!user) return null;
+
+  const services = db.services.filter((service) =>
+    user.role === 'profissional'
+      ? sameId(service.proId, user.id)
+      : sameId(service.ownerId, user.id)
+  );
+
+  return {
+    ...user,
+    totalServicos: services.length,
+    servicosEmAndamento: services.filter(
+      (s) => s.status === 'em_andamento'
+    ).length,
+    servicosFinalizados: services.filter(
+      (s) => s.status === 'concluido'
+    ).length,
+    servicosCancelados: services.filter(
+      (s) => s.status === 'cancelado'
+    ).length,
   };
 };
 
@@ -96,6 +163,27 @@ async function call(mock, path, method = 'GET', body) {
 
   return structuredClone(result);
 }
+
+const fileToBase64 = (file) =>
+  new Promise((resolve, reject) => {
+    if (!file) {
+      resolve(null);
+      return;
+    }
+
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      const resultado = String(reader.result || '');
+      resolve(resultado.split(',')[1] || '');
+    };
+
+    reader.onerror = () => {
+      reject(new Error('Não foi possível ler uma das fotos.'));
+    };
+
+    reader.readAsDataURL(file);
+  });
 
 // ======================================================
 // AUTENTICAÇÃO
@@ -382,12 +470,18 @@ export const getMyProfile = async (perfil) => {
 // USUÁRIOS E PROFISSIONAIS
 // ======================================================
 
-export const getUser = (id) =>
-  call(
-    () => withRating(find(db.users, id)),
-    E.user(id)
-  );
+export const getUser = (id) => {
+  if (API_CONFIG.USE_MOCK) {
+    return call(
+      () => withServiceStats(
+        withRating(find(db.users, id))
+      ),
+      E.user(id)
+    );
+  }
 
+  return buscarPerfilPublico(id);
+};
 
 export const listProfessionals = (filters = {}) =>
   call(
@@ -466,23 +560,84 @@ export const setPlan = (userId, plan) =>
 // SERVIÇOS
 // ======================================================
 
-export const listServices = ({ ownerId, forProId } = {}) =>
-  call(
+export const listServices = async ({ ownerId, forProId } = {}) => {
+  // API REAL
+  if (!API_CONFIG.USE_MOCK) {
+    const endpoint = forProId != null
+      ? E.servicosDisponiveis
+      : E.meusServicos;
+
+    const resultado = await http(endpoint);
+
+    return (Array.isArray(resultado) ? resultado : []).map((item) => ({
+      id: item.id,
+      serviceKind: item.serviceKind,
+      type: item.type,
+      quantity: item.quantidade,
+      description: item.descricao,
+      targetProId: item.targetProId,
+      proId: item.proId,
+      status: item.status,
+      jaAvaliado: item.jaAvaliado ?? item.JaAvaliado ?? false,
+
+      owner: {
+        id: item.clienteId,
+        name: item.clienteNome,
+        city: item.clienteCidade,
+        neighborhood: item.clienteBairro,
+      },
+
+      pro: item.proId
+        ? {
+            id: item.proId,
+            name: item.profissionalNome,
+          }
+        : null,
+
+      photos: [1, 2, 3]
+        .map((numero) => {
+          const foto = item[`foto${numero}`];
+          const contentType = item[`foto${numero}ContentType`];
+
+          return foto
+            ? `data:${contentType || 'image/jpeg'};base64,${foto}`
+            : null;
+        })
+        .filter(Boolean),
+
+      createdAt: item.criadoEmUtc,
+
+      offers: (Array.isArray(item.ofertas) ? item.ofertas : []).map(
+        (oferta) => ({
+          id: oferta.id,
+          price: oferta.preco,
+          quantity: oferta.quantidade,
+          total: oferta.valorTotal,
+          days: oferta.prazoDias,
+          status: oferta.status,
+          proId: oferta.profissionalId,
+          pro: {
+            id: oferta.profissionalId,
+            name: oferta.profissionalNome,
+          },
+        })
+      ),
+    }));
+  }
+
+  // MOCK: mantém o comportamento anterior
+  return call(
     () =>
       db.services
         .filter((service) =>
-          ownerId == null
-            ? true
-            : sameId(service.ownerId, ownerId)
+          ownerId == null ? true : sameId(service.ownerId, ownerId)
         )
-        .filter((service) =>
-          forProId == null
-            ? true
-            : service.status === 'aberto' &&
-              (
-                service.targetProId == null ||
-                sameId(service.targetProId, forProId)
-              )
+        .filter(
+          (service) =>
+            forProId == null ||
+            (service.status === 'aberto' &&
+              (service.targetProId == null ||
+                sameId(service.targetProId, forProId)))
         )
         .map((service) => ({
           ...service,
@@ -491,9 +646,7 @@ export const listServices = ({ ownerId, forProId } = {}) =>
             ? withRating(find(db.users, service.proId))
             : null,
           offers: db.offers
-            .filter((offer) =>
-              sameId(offer.serviceId, service.id)
-            )
+            .filter((offer) => sameId(offer.serviceId, service.id))
             .map((offer) => ({
               ...offer,
               pro: withRating(find(db.users, offer.proId)),
@@ -507,25 +660,57 @@ export const listServices = ({ ownerId, forProId } = {}) =>
           : ''),
     'GET'
   );
+};
 
-export const createService = (data) =>
-  call(
-    () => {
-      const service = {
-        id: nextId(),
-        proId: null,
-        status: 'aberto',
-        ...data,
-      };
 
-      db.services.unshift(service);
+export const createService = async (data) => {
+  // Mantém o comportamento atual do Mock
+  if (API_CONFIG.USE_MOCK) {
+    return call(
+      () => {
+        const service = {
+          id: nextId(),
+          proId: null,
+          status: 'aberto',
+          ...data,
+        };
 
-      return service;
-    },
-    E.services,
-    'POST',
-    data
-  );
+        db.services.unshift(service);
+
+        return service;
+      },
+      E.services,
+      'POST',
+      data
+    );
+  }
+
+  // API real
+  const fotos = data.photos || [];
+
+  const payload = {
+    tipoServicoId: data.serviceKindId,
+    tipoPecaId: data.typeId,
+    quantidade: Number(data.quantity),
+    descricao: data.description,
+    targetProId: data.targetProId || null,
+  };
+
+  for (let i = 0; i < 3; i++) {
+    const foto = fotos[i];
+    const numero = i + 1;
+
+    payload[`foto${numero}`] = foto?.file
+      ? await fileToBase64(foto.file)
+      : null;
+
+    payload[`foto${numero}ContentType`] = foto?.file
+      ? foto.file.type || 'image/jpeg'
+      : null;
+  }
+
+  return http(E.criarServico, 'POST', payload);
+};
 
 export const concludeService = (id) =>
   call(
@@ -612,19 +797,38 @@ export const listOffers = ({ proId } = {}) =>
           if (!service) {
             return {
               ...offer,
+              jaAvaliado: false,
               service: null,
             };
           }
 
+          const jaAvaliado = db.reviews.some(
+            (review) =>
+              sameId(review.serviceId, service.id) &&
+              sameId(review.fromId, proId)
+          );
+
+          console.log('RESULTADO AVALIAÇÃO:', jaAvaliado);
+
+          console.log('DEBUG AVALIAÇÃO', {
+            proIdRecebido: proId,
+            proIdDaOferta: offer.proId,
+            avaliacoes: db.reviews,
+            servicoId: offer.serviceId
+          });
+
           return {
             ...offer,
+            jaAvaliado,
             service: {
               ...service,
-              owner: withRating(find(db.users, service.ownerId)),
+              owner: withRating(
+                find(db.users, service.ownerId)
+              ),
             },
           };
         }),
-    E.offers + `?proId=${proId}`,
+    E.offers,
     'GET'
   );
 
@@ -701,7 +905,14 @@ export const createOffer = (data) =>
     },
     E.offers,
     'POST',
-    data
+    API_CONFIG.USE_MOCK
+      ? data
+      : {
+          servicoId: data.serviceId,
+          preco: Number(data.price),
+          quantidade: Number(data.quantity),
+          prazoDias: Number(data.days),
+        }
   );
 
 export const acceptOffer = (id) =>
@@ -1122,6 +1333,7 @@ export const listReviews = (toId) =>
     'GET'
   );
 
+
 export const createReview = (data) =>
   call(
     () => {
@@ -1134,8 +1346,7 @@ export const createReview = (data) =>
       const duplicate = db.reviews.some(
         (review) =>
           sameId(review.serviceId, data.serviceId) &&
-          sameId(review.fromId, data.fromId) &&
-          sameId(review.toId, data.toId)
+          sameId(review.fromId, data.fromId)
       );
 
       if (duplicate) {
@@ -1145,6 +1356,9 @@ export const createReview = (data) =>
       const review = {
         id: nextId(),
         ...data,
+        quality: data.quality ?? null,
+        price: data.price ?? null,
+        clarity: data.clarity ?? null,
       };
 
       db.reviews.push(review);
@@ -1153,9 +1367,17 @@ export const createReview = (data) =>
     },
     E.reviews,
     'POST',
-    data
+    {
+      servicoId: data.serviceId,
+      quality: data.quality ?? null,
+      deadline: data.deadline,
+      price: data.price ?? null,
+      service: data.service,
+      clarity: data.clarity ?? null,
+      comment: data.comment,
+    }
   );
-
+    
 // ======================================================
 // ADMINISTRAÇÃO: PAGAMENTOS E USUÁRIOS
 // ======================================================
@@ -1286,6 +1508,19 @@ export const listServiceKinds = async () => {
   return (Array.isArray(result) ? result : []).map((item) =>
     typeof item === 'string' ? item : item.nome
   );
+};
+
+export const listServiceKindOptions = async () => {
+  const result = await call(
+    () => getServiceKindRecords().filter((item) => item.ativo),
+    E.tiposServicos + '/ativos',
+    'GET'
+  );
+
+  return (Array.isArray(result) ? result : []).map((item) => ({
+    id: item.id,
+    nome: item.nome ?? item.name ?? '',
+  }));
 };
 
 // ======================================================
@@ -1490,6 +1725,19 @@ export const listServiceTypes = async () => {
   );
 };
 
+export const listServiceTypeOptions = async () => {
+  const result = await call(
+    () => getServiceTypeRecords().filter((item) => item.ativo),
+    E.tiposPecas + '/ativos',
+    'GET'
+  );
+
+  return (Array.isArray(result) ? result : []).map((item) => ({
+    id: item.id,
+    nome: item.nome ?? item.name ?? '',
+  }));
+};
+
 // ======================================================
 // LISTAR TODOS OS TIPOS DE PEÇAS - ADMIN
 // ======================================================
@@ -1617,4 +1865,53 @@ export const toggleServiceType = (id, ativo) =>
     'PATCH',
     { id, ativo }
   );
+
+
+async function buscarPerfilPublico(id) {
+  try {
+    const cliente = await http(`/api/clientes/${id}`);
+
+    return {
+      id: cliente.id,
+      name: cliente.nome,
+      role: 'usuario',
+      phone: cliente.telefone,
+      city: cliente.cidade,
+      neighborhood: cliente.bairro,
+      photo: cliente.foto
+        ? `data:${cliente.fotoContentType || 'image/jpeg'};base64,${cliente.foto}`
+        : null,
+      rating: 0,
+      reviewCount: 0,
+      ...obterEstatisticasServicos(cliente),
+    };
+  } catch (erro) {
+    if (
+      !erro.message.includes('404') &&
+      !erro.message.toLowerCase().includes('cliente não encontrado')
+    ) {
+      throw erro;
+    }
+  }
+
+  const profissional = await http(`/api/profissionais/${id}`);
+
+  return {
+    id: profissional.id,
+    name: profissional.nome,
+    role: 'profissional',
+    phone: profissional.telefone,
+    city: profissional.cidade,
+    neighborhood: profissional.bairro,
+    category: profissional.servicos?.[0] || '',
+    kinds: profissional.servicos || [],
+    pieces: profissional.pecas || [],
+    photo: profissional.foto
+      ? `data:${profissional.fotoContentType || 'image/jpeg'};base64,${profissional.foto}`
+      : null,
+    rating: 0,
+    reviewCount: 0,
+    ...obterEstatisticasServicos(profissional),
+  };
+}
 

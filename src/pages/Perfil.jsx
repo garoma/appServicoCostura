@@ -87,6 +87,32 @@ export default function Perfil({ user, params, go }) {
         </div>
       </section>
 
+      <section className="card">
+        <h3>Estatísticas de serviços</h3>
+
+        <div className="row wrap">
+          <div>
+            <strong>{profile.totalServicos ?? 0}</strong>
+            <p className="muted">Total de serviços</p>
+          </div>
+
+          <div>
+            <strong>{profile.servicosEmAndamento ?? 0}</strong>
+            <p className="muted">Em andamento</p>
+          </div>
+
+          <div>
+            <strong>{profile.servicosFinalizados ?? 0}</strong>
+            <p className="muted">Finalizados</p>
+          </div>
+
+          <div>
+            <strong>{profile.servicosCancelados ?? 0}</strong>
+            <p className="muted">Cancelados</p>
+          </div>
+        </div>
+      </section>
+
       <h3>Avaliações recebidas</h3>
 
       {reviews.map((r) => (

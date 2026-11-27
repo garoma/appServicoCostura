@@ -130,7 +130,11 @@ export default function MeusServicos({ user, go }) {
           toId={reviewing.proId}
           toName={reviewing.pro?.name || 'o profissional'}
           serviceId={reviewing.id}
-          onDone={() => setReviewing(null)}
+          tipoAvaliacao="clienteAvaliaProfissional"
+          onDone={async () => {
+            setReviewing(null);
+            await load();
+          }}
           onCancel={() => setReviewing(null)}
         />
       )}
@@ -259,13 +263,19 @@ export default function MeusServicos({ user, go }) {
             )}
 
             {s.status === 'concluido' && s.pro && (
-              <button
-                className="btn"
-                onClick={() => setReviewing(s)}
-                disabled={actionId !== null}
-              >
-                Avaliar {s.pro.name}
-              </button>
+              s.jaAvaliado ? (
+                <span className="badge">
+                  Avaliado
+                </span>
+              ) : (
+                <button
+                  className="btn"
+                  onClick={() => setReviewing(s)}
+                  disabled={actionId !== null}
+                >
+                  Avaliar {s.pro.name}
+                </button>
+              )
             )}
           </article>
         );

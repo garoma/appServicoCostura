@@ -122,7 +122,11 @@ export default function MinhasOfertas({ user, go }) {
           toId={reviewingOwner.id}
           toName={reviewingOwner.name}
           serviceId={reviewingService.id}
-          onDone={() => setReviewing(null)}
+          tipoAvaliacao="profissionalAvaliaCliente"
+          onDone={async () => {
+            setReviewing(null);
+            await load();
+          }}
           onCancel={() => setReviewing(null)}
         />
       )}
@@ -177,6 +181,12 @@ export default function MinhasOfertas({ user, go }) {
 
         const serviceStatus =
           service.status || 'não informado';
+
+        console.log('AVALIAÇÃO:', {
+          servicoId: service.id,
+          jaAvaliado: offer.jaAvaliado,
+          offer
+        });
 
         return (
           <article className="card" key={offer.id}>
@@ -377,18 +387,18 @@ export default function MinhasOfertas({ user, go }) {
               >
                 Ver cliente
               </button>
-
               {offer.status === 'aceita' &&
                 service.status === 'concluido' &&
                 owner?.id && (
                   <button
                     type="button"
                     className="btn small primary"
+                    disabled={offer.jaAvaliado}
                     onClick={() => openReview(offer)}
                   >
-                    Avaliar cliente
+                    {offer.jaAvaliado ? 'Cliente avaliado' : 'Avaliar cliente'}
                   </button>
-                )}
+              )}
             </div>
           </article>
         );
